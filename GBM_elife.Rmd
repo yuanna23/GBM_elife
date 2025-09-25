@@ -1,0 +1,270 @@
+---
+title: "GBM_project"
+author: "Yuanna"
+date: "3/1/2024"
+output: html_document
+---
+
+```{r setup}
+setwd("C:/#GBM")
+dir()
+```
+
+```{r install packages}
+### install required packages ####
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+if (!require("data.table", quietly = TRUE))
+  install.packages("BiocManager")
+if (!require("DESeq2", quietly = TRUE))
+  BiocManager::install("DESeq2")
+
+##### load required packages ####
+library(data.table)
+library(DESeq2)
+
+```
+
+```{r extract geno and pheno matrix- counts}
+##### input the phenotype table ####
+pd <- fread("TcgaTargetGTEX_phenotype.txt.gz") #download from UCSC Xena cohort: TCGA TARGET GTEx
+pd <- as.data.frame.matrix(pd)
+
+##### input the expression table and data convert####
+exp <- fread("TCGA-GTEx-TARGET-gene-exp-counts.deseq2-normalized.log2.gz") #download from UCSC Xena cohort: TCGA TARGET GTEx
+exp <- as.data.frame.matrix(exp)
+rownames(exp) <- exp[,1]
+exp <- exp[,2:ncol(exp)]
+save(pd,file = "pd.Rdata")
+save(exp,file = "exp.Rdata")
+
+##### select the normal and cancer sample ids with target disease from phenotype #### 
+pd_N <- pd[pd[,5] == "Normal Tissue",]
+table(pd_N[,4]) #view the primary site of the samples to determine the label
+pd_N <- pd_N[pd_N[,4] == "Brain",] #select the normal brain into your target tissue type
+pd_N1<-pd_N[pd_N[,3]=="Brain - Frontal Cortex (Ba9)",]
+pd_N2<-pd_N[pd_N[,3]=="Brain - Cortex",]
+pd_N<-rbind(pd_N1,pd_N2)
+#pd_N <- pd_N[pd_N[,4] == "Thyroid",]
+pd_n <- as.character(pd_N$sample)
+pd_C <- pd[pd[,5] == "Primary Tumor",]
+table(pd_C[,4]) #view the primary site of the samples to determine the label
+pd_C <- pd_C[pd_C[,4] == "Brain",] #select the normal change <your sample type> into your target tissue type
+# pd_C <- pd_C[pd_C[,4] == "Thyroid Gland",]
+pd_c <- as.character(pd_C$sample)
+save(pd_c,file = "pd_c.Rdata")
+save(pd_n,file = "pd_n.Rdata")
+##### extract the expression matrix of normal and cancer samples ####
+exp_n <- exp[,colnames(exp) %in% pd_n]
+exp_c <- exp[,colnames(exp) %in% pd_c]
+exp_nc <- cbind(exp_n,exp_c) #merge normal and cancer sample
+#expression matrix convert
+exp_nc <- (2^exp_nc - 1)
+exp_nc <- round(exp_nc,0)
+```
+
+```{r extract geno and pheno matrix-TPM }
+setwd("C:/#GBM")
+dir()
+library(data.table)
+load("pd_c.Rdata")
+load("pd_n.Rdata")
+exp_tpm <- fread("TcgaTargetGtex_rsem_gene_tpm.gz") #download from UCSC Xena cohort: TCGA TARGET GTEx
+exp_tpm <- as.data.frame.matrix(exp_tpm)
+rownames(exp_tpm) <- exp_tpm[,1]
+exp_tpm <- exp_tpm[,2:ncol(exp_tpm)]
+exp_tpm_n <- exp_tpm[,colnames(exp_tpm) %in% pd_n]
+exp_tpm_c <- exp_tpm[,colnames(exp_tpm) %in% pd_c]
+exp_tpm_nc <- cbind(exp_tpm_n,exp_tpm_c)
+save(exp_tpm_nc,file = "exp_tpm_nc.Rdata")
+```
+
+```{r extract GBM}
+pd_GBM<-pd_C[1:153,]
+class(pd_c)
+exp_tpm_n <- exp_tpm[,colnames(exp_tpm) %in% pd_n]
+exp_tpm_GBM <- exp_tpm_c[,1:153]
+exp_tpm_nc_GBM <- cbind(exp_tpm_n,exp_tpm_GBM)
+exp_nc<-exp_tpm_nc_GBM
+exp<-data.frame(rownames(exp_tpm_nc_GBM),exp_tpm_nc_GBM,row.names = NULL)
+ref<-read.table("ensembl.to.gene.txt",sep = "\t",header = T)
+colnames(exp)[1] = "ENSG"
+colnames(ref)=c("ID","ENSG","gene")
+exp_gene<-merge(ref,exp,by="ENSG")
+write.csv(exp_gene,file="GBM153_GTEX207_gene.csv")
+class(exp$ENSG)
+exp_clean<- data.frame(gsub("\\.\\d+", "", exp$ENSG),exp[,-1])
+colnames(exp_clean)[1]="ENSG"
+colnames(ref)=c("ENSG","ID","gene")
+exp_gene<-merge(ref,exp_clean,by="ENSG")
+write.csv(exp_gene,file="GBM153_GTEX207_gene.csv")
+```
+
+```{r extract RQC}
+gene_GBM_t<-gene_GBM[,3:363]
+class(gene_GBM_t[,1])
+gene_GBM_t<- gene_GBM_t[!duplicated(gene_GBM_t$gene), ]#remove the duplicate rows
+rownames(gene_GBM_t)<-gene_GBM_t$gene
+gene_GBM_t<-gene_GBM_t[,-1]
+gene_GBM_t<-data.frame(t(gene_GBM_t))
+gene_GBM<-data.frame(rownames(gene_GBM_t),gene_GBM_t,row.names = NULL)
+colnames(gene_GBM)[1]="sample"
+pd_GBM<-read.csv("pd_GBM.csv",header = T,row.names = 1)#set the first column to rownames
+gene_GBM$sample <- gsub("\\.", "-", gene_GBM$sample)#change the dot to dash of samples
+all_GBM<-merge(pd_GBM,gene_GBM,by="sample")
+write.csv(all_GBM,file = "all_GBM_matrix.csv")
+RQC<-read.table("RQCgenes.txt",header = T)
+genelist<-RQC$RQCgenes
+RQC_GBM <- all_GBM[,colnames(all_GBM) %in% genelist]
+class(colnames(all_GBM))
+class(genelist)
+RQC_GBM_all<-data.frame(all_GBM[,1:2],RQC_GBM)
+write.csv(RQC_GBM_all,"RQC_GBM_all.csv")
+```
+
+```{r DEG analysis}
+setwd("C:/#GBM")
+dir()
+exp<-read.csv("all_GBM_matrix.csv",header = T,row.names = T)
+exp<-exp[,-1]
+exp<-exp[,-2]
+rownames(exp)=exp[,1]
+exp<-exp[,-1]
+exp_t<-data.frame(t(exp))#one row per gene, one column per sample
+cutoff<-apply(exp_t, MARGIN = 1, median, na.rm = TRUE)
+is_expressed<-exp_t>cutoff
+keep <- rowSums(is_expressed) > 2
+table(keep)
+library(limma)
+design <- model.matrix(~0+exp$group)
+colnames(design) <-c("Normal","Tumour")
+fit <- lmFit(exp_keep, design)
+head(fit$coefficients)
+contrasts <- makeContrasts(Tumour - Normal, levels=design)
+fit2 <- contrasts.fit(fit, contrasts)
+fit2 <- eBayes(fit2)
+GBM_DEG<-topTable(fit2,number = Inf, sort.by = "B", adjust.method = "BH")
+RQC<-read.table("RQCgenes_manuscript.txt",header = T)
+RQC_sorted<-data.frame(RQC[order(RQC$RQCgenes),])
+colnames(RQC_sorted)=c("gene")
+GBM_RQC_DEG<-GBM_DEG[rownames=RQC_sorted$gene,]
+matches<-row.names(GBM_DEG) %in% RQC_sorted$gene
+GBM_RQC_DEG<-GBM_DEG[matches,]
+GBM_RQC_DEG<-data.frame(rownames(GBM_RQC_DEG),GBM_RQC_DEG)
+colnames(GBM_RQC_DEG)[1]=c("gene")
+rownames(GBM_RQC_DEG)<-NULL
+write.csv(GBM_RQC_DEG,file = "GBM_RQC_DEG.csv")
+```
+
+```{r plot combined figure}
+library(ggplot2)
+library(ggpubr)
+library(RColorBrewer)
+
+rm(list = ls())
+options(stringsAsFactors = FALSE) 
+
+exp <- read.csv("RQC_GBM_matrix_manuscript.csv",header=T)
+exp<-exp[,-1]
+exp<-exp[-160,]#one normal sample was deleted as outlier,normal=206,cancer=153
+
+write.csv(exp,"RQC_TPM_manuscript.csv",row.names = F)
+ylabname <- paste("RQC Genes", "Expression Level")
+library(reshape2)
+exp_RQC<-melt(exp,id.vars = c("sample","group"))
+exp_RQC<-exp_RQC[,-1]
+colnames(exp_RQC) <- c("Group", "RQC", "Gene")
+exp_RQC$RQC<-as.character(exp_RQC$RQC)
+exp_RQC_ordered<-exp_RQC[order(exp_RQC$RQC),]
+write.csv(exp_RQC_ordered,"exp_RQC_ordered_manuscript.csv",row.names = F)
+
+p1 <- ggboxplot(exp_RQC_ordered, x = "RQC", y = "Gene", fill = 'Group',
+                ylab = ylabname,
+                color = "Group", 
+                palette = c("#00AFBB",  "#FC4E07"),
+                ggtheme = theme_minimal())
+comp<- compare_means(Gene ~ Group, group.by = "RQC", data = exp_RQC_ordered,
+                     method = "t.test", symnum.args = list(cutpoints = c(0,0.001, 0.01, 0.05, 1), symbols = c( "***", "**", "*", "ns")),
+                     p.adjust.method = "holm")
+#add significance
+p2 <- p1 + stat_pvalue_manual(comp, x = "RQC", y.position = 12.0,
+                              label = "p.signif", position = position_dodge(1.0))
+p2
+dev.off()
+### pdf version
+ggsave("RQC_GBM.pdf",p2,width = 14, height = 5)
+max(exp_RQC_ordered$Gene)
+min(exp_RQC_ordered$Gene)
+```
+
+```{r combined figure 18genes}
+setwd("C:/#GBM")
+dir()
+#remove FC<1.5 genes and draw graph
+exp <- read.csv("RQC_TPM_manuscript_18genes.csv",header=T)
+
+ylabname <- paste("Expression Level","(","TPM",")")
+library(reshape2)
+exp_RQC<-melt(exp,id.vars = c("sample","group"))
+exp_RQC<-exp_RQC[,-1]
+colnames(exp_RQC) <- c("Group", "RQC", "Gene")
+exp_RQC$RQC<-as.character(exp_RQC$RQC)
+exp_RQC_ordered<-exp_RQC[order(exp_RQC$RQC),]
+write.csv(exp_RQC_ordered,"exp_RQC_ordered_manuscript_18genes.csv",row.names = F)
+exp_RQC_ordered<-read.csv("exp_RQC_ordered_manuscript_18genes.csv",header = T)
+library(ggplot2)
+p1 <- ggboxplot(exp_RQC_ordered, x = "RQC", y = "Gene", fill = 'Group',
+                ylab = ylabname,
+                color = "Group", 
+                palette = c("#00AFBB",  "#FC4E07"),
+                ggtheme = theme_classic())
+comp<- compare_means(Gene ~ Group, group.by = "RQC", data = exp_RQC_ordered,
+                     method = "t.test", symnum.args = list(cutpoints = c(0,0.001, 0.01, 0.05, 1), symbols = c( "***", "**", "*", "ns")),
+                     p.adjust.method = "holm")
+#add significance
+p2 <- p1 + stat_pvalue_manual(comp, x = "RQC", y.position = 12.0,
+                              label = "p.signif", position = position_dodge(1.0))
+p2
+dev.off()
+### pdf version
+ggsave("RQC_GBM_18genes.pdf",p2,width = 14, height = 5)
+```
+
+```{r combined figure 18genes violin plot}
+exp_RQC_ordered<-read.csv("exp_RQC_ordered_manuscript.csv",header = T)
+library(ggplot2)
+library(ggpubr)
+library(RColorBrewer)
+ylabname <- paste("Expression Level","(","TPM",")")
+dodge_width <- 0.6
+p <- ggplot(exp_RQC_ordered, ylab = ylabname,aes(x = RQC, y = Gene, fill = Group, color = Group)) + 
+  geom_violin(position = position_dodge(dodge_width), trim = FALSE, alpha = 0.75) +
+  geom_boxplot(width = 0.1, position = position_dodge(dodge_width), fill = "white", outlier.shape = NA) +
+  scale_fill_manual(values = c("normal" = "#00AFBB", "tumor" = "#FC4E07")) +
+  scale_color_manual(values = c("normal" = "#00AFBB", "tumor" = "#FC4E07")) +
+  theme_classic() +
+  scale_x_discrete(expand = expand_scale(add = 1.0))
+p
+ggsave("RQC_GBM_violin.pdf",p,width = 14, height = 5)
+
+#---list all genes in the figure
+exp<-read.csv("exp_RQC_ordered_manuscript.csv",header = T)
+library(ggplot2)
+library(ggpubr)
+library(RColorBrewer)
+ylabname <- paste("Expression Level","(","TPM",")")
+dodge_width <- 0.6
+p <- ggplot(exp, ylab = ylabname,aes(x = RQC, y = Gene, fill = Group, color = Group)) + 
+  geom_violin(position = position_dodge(dodge_width), trim = FALSE, alpha = 0.75) +
+  geom_boxplot(width = 0.1, position = position_dodge(dodge_width), fill = "white", outlier.shape = NA) +
+  scale_fill_manual(values = c("normal" = "#00AFBB", "tumor" = "#FC4E07")) +
+  scale_color_manual(values = c("normal" = "#00AFBB", "tumor" = "#FC4E07")) +
+  theme_classic() +
+  ylab("Expression level (TPM)")+
+  scale_x_discrete(expand = expand_scale(add = 1.0))
+p
+ggsave("RQC_GBM_violin_18genes.pdf",p,width = 14, height = 5)
+
+ggsave("RQC_GBM_violin_18genes_2.pdf",p,width = 16, height = 5)
+```
+
